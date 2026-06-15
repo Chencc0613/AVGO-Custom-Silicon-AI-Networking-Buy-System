@@ -95,6 +95,19 @@ AVGO_MANUAL = {
 
     # Semiconductor cycle 補正：非 AI 半導體/寬頻/手機等是否拖累
     "NON_AI_SEMI_CYCLE_SCORE": 0.0,
+
+    # Valuation / margin manual overrides.
+    # yfinance 有時抓不到 AVGO 的 forward PE / margin，Streamlit 版可手動覆蓋。
+    # 0 / NaN = 不覆蓋。百分比請用小數，例如 0.65 = 65%。
+    "FORWARD_PE_OVERRIDE": np.nan,
+    "TRAILING_PE_OVERRIDE": np.nan,
+    "FORWARD_EPS_OVERRIDE": np.nan,
+    "TRAILING_EPS_OVERRIDE": np.nan,
+    "GROSS_MARGIN_OVERRIDE": np.nan,
+    "OPERATING_MARGIN_OVERRIDE": np.nan,
+    "FCF_MARGIN_OVERRIDE": np.nan,
+    "REVENUE_GROWTH_OVERRIDE": np.nan,
+    "EARNINGS_GROWTH_OVERRIDE": np.nan,
 }
 
 # Hyperscaler CapEx basket：AVGO 的需求核心是 hyperscaler AI ASIC + networking CapEx。
@@ -621,10 +634,66 @@ def compute_stock_risk(ticker: str, end: str, rules: Dict[str, Any], avg_cost: f
 # FUNDAMENTALS / PE
 # ============================================================
 
-def fetch_fundamentals(ticker: str) -> Dict[str, Any]:
-    out = {"trailing_pe": np.nan, "forward_pe": np.nan, "trailing_eps": np.nan, "forward_eps": np.nan, "gross_margin": np.nan, "operating_margin": np.nan, "profit_margin": np.nan, "revenue_growth": np.nan, "earnings_growth": np.nan, "free_cashflow": np.nan, "total_revenue": np.nan, "fcf_margin": np.nan, "source_ok": False, "error": ""}
+def _first_financial_value(df: pd.DataFrame, candidates, ttm: bool = True):
+    """Find a financial-statement row and return latest TTM/annual value when possible."""
+    if df is None or df.empty:
+        return np.nan
+    row = find_row_by_candidates(df, candidates)
+    if row is None:
+        return np.nan
     try:
-        info = yf.Ticker(ticker).info or {}
+        s = pd.Series(df.loc[row]).dropna().astype(float)
+        if s.empty:
+            return np.nan
+        if ttm and len(s) >= 4:
+            return float(s.iloc[:4].sum())
+        return float(s.iloc[0])
+    except Exception:
+        return np.nan
+
+
+def _apply_manual_fundamental_overrides(out: Dict[str, Any]) -> Dict[str, Any]:
+    """Manual overrides prevent yfinance missing fundamentals from turning PE/PEG into NA."""
+    override_map = {
+        "forward_pe": "FORWARD_PE_OVERRIDE",
+        "trailing_pe": "TRAILING_PE_OVERRIDE",
+        "forward_eps": "FORWARD_EPS_OVERRIDE",
+        "trailing_eps": "TRAILING_EPS_OVERRIDE",
+        "gross_margin": "GROSS_MARGIN_OVERRIDE",
+        "operating_margin": "OPERATING_MARGIN_OVERRIDE",
+        "fcf_margin": "FCF_MARGIN_OVERRIDE",
+        "revenue_growth": "REVENUE_GROWTH_OVERRIDE",
+        "earnings_growth": "EARNINGS_GROWTH_OVERRIDE",
+    }
+    used = []
+    for out_key, manual_key in override_map.items():
+        v = _safe_float(AVGO_MANUAL.get(manual_key, np.nan))
+        # 0 means no override; negative growth overrides are allowed for growth keys only.
+        if pd.isna(v):
+            continue
+        if out_key in ["revenue_growth", "earnings_growth"]:
+            if v != 0:
+                out[out_key] = v
+                used.append(out_key)
+        else:
+            if v > 0:
+                out[out_key] = v
+                used.append(out_key)
+    out["manual_overrides_used"] = used
+    return out
+
+
+def fetch_fundamentals(ticker: str) -> Dict[str, Any]:
+    out = {
+        "trailing_pe": np.nan, "forward_pe": np.nan, "trailing_eps": np.nan, "forward_eps": np.nan,
+        "gross_margin": np.nan, "operating_margin": np.nan, "profit_margin": np.nan,
+        "revenue_growth": np.nan, "earnings_growth": np.nan,
+        "free_cashflow": np.nan, "total_revenue": np.nan, "fcf_margin": np.nan,
+        "source_ok": False, "error": "", "manual_overrides_used": [],
+    }
+    try:
+        tk = yf.Ticker(ticker)
+        info = tk.info or {}
         out.update({
             "trailing_pe": _safe_float(info.get("trailingPE", np.nan)),
             "forward_pe": _safe_float(info.get("forwardPE", np.nan)),
@@ -639,11 +708,49 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Any]:
             "total_revenue": _safe_float(info.get("totalRevenue", np.nan)),
             "source_ok": True,
         })
-        if not pd.isna(out["free_cashflow"]) and not pd.isna(out["total_revenue"]) and out["total_revenue"] > 0:
+
+        # Statement fallback: Yahoo sometimes omits AVGO summary ratios.
+        # Use quarterly financials/cashflow to compute margins and trailing EPS proxies.
+        try:
+            qfin = tk.quarterly_financials
+        except Exception:
+            qfin = pd.DataFrame()
+        try:
+            qcf = tk.quarterly_cashflow
+        except Exception:
+            qcf = pd.DataFrame()
+
+        revenue_ttm = _first_financial_value(qfin, ["Total Revenue", "Revenue"], ttm=True)
+        gross_profit_ttm = _first_financial_value(qfin, ["Gross Profit"], ttm=True)
+        operating_income_ttm = _first_financial_value(qfin, ["Operating Income", "Operating Income Loss"], ttm=True)
+        net_income_ttm = _first_financial_value(qfin, ["Net Income", "Net Income Common Stockholders"], ttm=True)
+        diluted_eps_ttm = _first_financial_value(qfin, ["Diluted EPS", "Diluted EPS Diluted EPS"], ttm=True)
+        fcf_ttm = _first_financial_value(qcf, ["Free Cash Flow"], ttm=True)
+        if pd.isna(fcf_ttm):
+            cfo_ttm = _first_financial_value(qcf, ["Operating Cash Flow", "Total Cash From Operating Activities"], ttm=True)
+            capex_ttm = _first_financial_value(qcf, ["Capital Expenditure", "Capital Expenditures", "Capital Spending", "Purchase Of PPE", "Purchase Of Property Plant And Equipment"], ttm=True)
+            if not pd.isna(cfo_ttm) and not pd.isna(capex_ttm):
+                fcf_ttm = cfo_ttm - abs(capex_ttm)
+
+        if pd.isna(out["total_revenue"]) and not pd.isna(revenue_ttm):
+            out["total_revenue"] = revenue_ttm
+        if pd.isna(out["gross_margin"]) and not pd.isna(gross_profit_ttm) and not pd.isna(revenue_ttm) and revenue_ttm > 0:
+            out["gross_margin"] = gross_profit_ttm / revenue_ttm
+        if pd.isna(out["operating_margin"]) and not pd.isna(operating_income_ttm) and not pd.isna(revenue_ttm) and revenue_ttm > 0:
+            out["operating_margin"] = operating_income_ttm / revenue_ttm
+        if pd.isna(out["profit_margin"]) and not pd.isna(net_income_ttm) and not pd.isna(revenue_ttm) and revenue_ttm > 0:
+            out["profit_margin"] = net_income_ttm / revenue_ttm
+        if pd.isna(out["free_cashflow"]) and not pd.isna(fcf_ttm):
+            out["free_cashflow"] = fcf_ttm
+        if pd.isna(out["fcf_margin"]) and not pd.isna(out["free_cashflow"]) and not pd.isna(out["total_revenue"]) and out["total_revenue"] > 0:
             out["fcf_margin"] = out["free_cashflow"] / out["total_revenue"]
+        if pd.isna(out["trailing_eps"]) and not pd.isna(diluted_eps_ttm) and diluted_eps_ttm > 0:
+            out["trailing_eps"] = diluted_eps_ttm
+
     except Exception as e:
         out["error"] = str(e)
-    return out
+
+    return _apply_manual_fundamental_overrides(out)
 
 
 def compute_pe_pack(ticker: str, price: float, rules: Dict[str, Any]) -> Dict[str, Any]:

@@ -1,16 +1,13 @@
-# AVGO Custom Silicon + AI Networking Buy System
+# AVGO Streamlit App
 
-Streamlit mobile-style dashboard for AVGO.
+Build: AVGO_FUNDAMENTAL_OVERRIDE_V2_2026_06_15
 
 ## Files
 
-```text
-streamlit_app.py
-avgo_custom_silicon_buy_system.py
-requirements.txt
-.streamlit/config.toml
-README_DEPLOY.md
-```
+- `streamlit_app.py`
+- `avgo_custom_silicon_buy_system.py`
+- `requirements.txt`
+- `.streamlit/config.toml`
 
 ## Local run
 
@@ -19,26 +16,12 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-## Streamlit Community Cloud
+## Streamlit Cloud
 
-- Main file path: `streamlit_app.py`
-- Recommended Python: 3.11 or 3.12
-- This app does **not** use `pandas_datareader` or FRED, to avoid Streamlit Cloud compatibility issues.
-
-## Core logic
-
-AVGO is modeled as:
+Main file path:
 
 ```text
-Custom ASIC / XPU demand
-+ AI networking
-+ hyperscaler AI CapEx
-+ VMware / software FCF
-+ margin and FCF quality
-- customer concentration / geo risk
-- valuation and macro risk
+streamlit_app.py
 ```
 
-Manual inputs are intentional because the most important AVGO stock drivers often come from earnings-call commentary, design-win disclosures, ASIC backlog, networking demand, and VMware integration updates that yfinance cannot reliably parse.
-
-Manual execution only. This app never places orders.
+This version avoids `pandas_datareader` and FRED dependencies. It uses yfinance market proxies and includes manual valuation / margin overrides for cases where yfinance returns `NA` for AVGO PE, EPS, or margins.

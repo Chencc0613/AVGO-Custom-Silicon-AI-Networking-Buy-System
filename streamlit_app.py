@@ -13,7 +13,7 @@ import streamlit as st
 
 import avgo_custom_silicon_buy_system as core
 
-APP_BUILD_VERSION = "AVGO_CUSTOM_SILICON_V1_JSON_SAFE_2026_06_15"
+APP_BUILD_VERSION = "AVGO_FUNDAMENTAL_OVERRIDE_V2_2026_06_15"
 
 st.set_page_config(
     page_title="AVGO Custom Silicon Buy System",
@@ -186,6 +186,16 @@ with st.sidebar.expander("財報後手動輸入", expanded=True):
     geo_export_score = st.slider("Geo / Export Risk：出口管制/地緣風險", -1.0, 1.0, 0.0, 0.05)
     non_ai_cycle_score = st.slider("Non-AI Semi Cycle 補正", -1.0, 1.0, 0.0, 0.05)
 
+with st.sidebar.expander("估值 / 財務資料覆蓋", expanded=True):
+    st.caption("AVGO 的 yfinance 有時會漏掉 PE / margin。留 0 = 不覆蓋；填了就用你的數值。")
+    manual_forward_pe = st.number_input("Forward PE override", min_value=0.0, value=0.0, step=0.5)
+    manual_trailing_pe = st.number_input("Trailing PE override", min_value=0.0, value=0.0, step=0.5)
+    manual_forward_eps = st.number_input("Forward EPS override", min_value=0.0, value=0.0, step=0.1)
+    manual_trailing_eps = st.number_input("Trailing EPS override", min_value=0.0, value=0.0, step=0.1)
+    manual_gross_margin_pct = st.number_input("Gross margin override %", min_value=0.0, value=0.0, step=1.0)
+    manual_operating_margin_pct = st.number_input("Operating margin override %", min_value=0.0, value=0.0, step=1.0)
+    manual_fcf_margin_pct = st.number_input("FCF margin override %", min_value=0.0, value=0.0, step=1.0)
+
 with st.sidebar.expander("策略規則", expanded=False):
     trend_mode = st.selectbox("Trend mode", ["BALANCED", "STRICT", "LOOSE"], index=["BALANCED", "STRICT", "LOOSE"].index(core.RISK_RULES.get("BUY_TREND_MODE", "BALANCED")))
     pe_source = st.selectbox("PE source", ["FORWARD", "TRAILING", "BLENDED", "CONSERVATIVE"], index=0)
@@ -208,6 +218,8 @@ def run_model_cached(
     equity_usd, free_cash_usd, avgo_shares, avgo_avg_cost, allow_fractional, max_daily_cash_use_frac,
     custom_asic_score, ai_networking_score, hyperscaler_capex_manual_score, vmware_score, integration_score,
     concentration_score, geo_export_score, non_ai_cycle_score,
+    manual_forward_pe, manual_trailing_pe, manual_forward_eps, manual_trailing_eps,
+    manual_gross_margin_pct, manual_operating_margin_pct, manual_fcf_margin_pct,
     trend_mode, pe_source, valuation_mode, add_enable, macro_hard_block, no_buy_below_ma200,
     start_date_str, end_date_str,
 ):
@@ -236,6 +248,13 @@ def run_model_cached(
         "CUSTOMER_CONCENTRATION_RISK_SCORE": float(concentration_score),
         "GEO_EXPORT_RISK_SCORE": float(geo_export_score),
         "NON_AI_SEMI_CYCLE_SCORE": float(non_ai_cycle_score),
+        "FORWARD_PE_OVERRIDE": float(manual_forward_pe) if float(manual_forward_pe) > 0 else np.nan,
+        "TRAILING_PE_OVERRIDE": float(manual_trailing_pe) if float(manual_trailing_pe) > 0 else np.nan,
+        "FORWARD_EPS_OVERRIDE": float(manual_forward_eps) if float(manual_forward_eps) > 0 else np.nan,
+        "TRAILING_EPS_OVERRIDE": float(manual_trailing_eps) if float(manual_trailing_eps) > 0 else np.nan,
+        "GROSS_MARGIN_OVERRIDE": float(manual_gross_margin_pct) / 100.0 if float(manual_gross_margin_pct) > 0 else np.nan,
+        "OPERATING_MARGIN_OVERRIDE": float(manual_operating_margin_pct) / 100.0 if float(manual_operating_margin_pct) > 0 else np.nan,
+        "FCF_MARGIN_OVERRIDE": float(manual_fcf_margin_pct) / 100.0 if float(manual_fcf_margin_pct) > 0 else np.nan,
     })
 
     res_macro = core.build_macro_dashboard(
@@ -276,6 +295,8 @@ try:
             equity_usd, free_cash_usd, avgo_shares, avgo_avg_cost, allow_fractional, max_daily_cash_use_frac,
             custom_asic_score, ai_networking_score, hyperscaler_capex_manual_score, vmware_score, integration_score,
             concentration_score, geo_export_score, non_ai_cycle_score,
+            manual_forward_pe, manual_trailing_pe, manual_forward_eps, manual_trailing_eps,
+            manual_gross_margin_pct, manual_operating_margin_pct, manual_fcf_margin_pct,
             trend_mode, pe_source, valuation_mode, add_enable, macro_hard_block, no_buy_below_ma200,
             str(start_date), str(end_date),
         )
